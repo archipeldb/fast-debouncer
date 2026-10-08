@@ -1,0 +1,115 @@
+name: Crystal CI
+
+on:
+  pull_request:
+
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - LICENSE
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Crystal
+        uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: latest
+
+      - name: Check format
+        run: crystal tool format --check
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Install Crystal
+        uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: latest
+
+      - name: Run specs
+        run: crystal spec --error-trace
+
+  coverage:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install Crystal
+        uses: crystal-lang/install-crystal@v1
+        with:
+          crystal: latest
+
+      - name: Install kcov
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y kcov
+
+      - name: Build specs binary
+        run: |
+          mkdir -p bin coverage
+          crystal build all_specs.cr -o bin/all_specs --debug
+
+      - name: Run kcov (src coverage)
+        run: |
+          kcov --clean --include-path=$(pwd)/src ./coverage ./bin/all_specs
+
+      - name: Require full src line coverage
+        run: |
+          set -euo pipefail
+          xml=$(find coverage -name cobertura.xml | sort | tail -1)
+          grep 'line-rate="1.000"' "$xml" | head -1
+
+      - name: Generate unreachable report
+        run: |
+          crystal tool unreachable --format=codecov --no-color --exclude spec all_specs.cr > ./coverage/unreachable.codecov.json
+
+      - name: Generate macro coverage
+        run: |
+          crystal tool macro_code_coverage --format=codecov --no-color all_specs.cr > ./coverage/macro_coverage.root.codecov.json
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: archipeldb/fast-debouncer
+          files: ./coverage/**/cobertura.xml,./coverage/**/cov.xml,./coverage/unreachable.codecov.json,./coverage/macro_coverage.*.codecov.json
+          flags: unittests
+          fail_ci_if_error: true
+          verbose: true
+
+      - name: Run specs and generate JUnit XML for Test Analytics
+        run: |
+          mkdir -p junit
+          crystal spec --junit_output ./junit --error-trace
+
+      - name: Upload test results to Codecov (Test Analytics)
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v7
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          slug: archipeldb/fast-debouncer
+          report_type: test_results
+          files: ./junit/output.xml
+          flags: unittests
+          fail_ci_if_error: false
+          verbose: true
