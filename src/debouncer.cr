@@ -10,7 +10,7 @@ require "sync/mutex"
 class Debouncer
   include Engine
 
-  VERSION = "0.1.0"
+  VERSION = "0.2.0"
 
   # The delay must be greater than zero.
   def initialize(delay : Time::Span, &@action : -> Nil)

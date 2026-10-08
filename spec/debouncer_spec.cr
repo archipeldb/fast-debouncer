@@ -51,7 +51,7 @@ describe Debouncer do
   end
 
   it "exposes the version" do
-    Debouncer::VERSION.should eq("0.1.0")
+    Debouncer::VERSION.should eq("0.2.0")
   end
 
   it "runs the action once after the quiet period" do
