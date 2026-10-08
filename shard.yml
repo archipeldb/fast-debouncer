@@ -4,6 +4,6 @@ version: 0.1.0
 authors:
   - Paulo Coghi <paulo@airsailer.io>
 
-crystal: '>= 1.18.2'
+crystal: ">= 1.21.0"
 
 license: MIT

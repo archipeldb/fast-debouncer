@@ -1,77 +1,81 @@
-module Debouncer
+require "./debouncer/engine"
+require "sync/mutex"
+
+# Runs one action after calls stop for the given delay.
+#
+# Create the debouncer with the action. Then call it for each event.
+# A burst of calls runs the action once.
+# The action runs on a worker fiber.
+# `flush` runs a waiting action on the caller fiber.
+class Debouncer
+  include Engine
+
   VERSION = "0.1.0"
 
-  class Debouncer
-    @trigger_channel : Channel(Nil)?
-    @current_action : Proc(Nil)?
-    @current_delay : Time::Span
-    @running : Atomic(Bool)
-    @mutex : Mutex
+  # The delay must be greater than zero.
+  def initialize(delay : Time::Span, &@action : -> Nil)
+    @delay_ns = Delay.nanoseconds(delay)
+  end
 
-    def initialize(@current_delay : Time::Span = 0.seconds)
-      @running = Atomic(Bool).new(false)
-      @mutex = Mutex.new
-    end
+  # Move the deadline forward. The call returns before the action runs.
+  def call : Nil
+    schedule
+  end
 
-    private def start
-      return if @running.get
+  # Build a debouncer that keeps the latest value and passes it to the action.
+  # *type* selects the value type. For example, `Debouncer.for(String, 50.milliseconds)`.
+  def self.for(type : T.class, delay : Time::Span, &action : T -> Nil) : Latest(T) forall T
+    Latest(T).new(delay, &action)
+  end
 
-      @running.set(true)
-      @trigger_channel = Channel(Nil).new(1) # Buffered for signal tolerance
+  private def deliver : Nil
+    @action.call
+  end
 
-      spawn do
-        loop do
-          select
-          when @trigger_channel.not_nil!.receive
-            # Reset timer via continued loop—no-op, just extend
-          when timeout(@current_delay)
-            @mutex.synchronize do
-              if action = @current_action
-                begin
-                  action.call
-                rescue ex
-                  # Empty rescue just to prevent crash, without logging
-                ensure
-                  @current_action = nil
-                end
-              end
-            end
-            stop
-            break
-          end
-        end
-      rescue Channel::ClosedError
-        # Graceful exit
+  # Keeps the latest value and passes that value to the action.
+  class Latest(T)
+    include Engine
+
+    # Holds one value. The object is created on the first call and then reused.
+    private class Box(U)
+      property value : U
+
+      def initialize(@value : U)
       end
     end
 
-    def debounce(delay : Time::Span, &action : -> Nil)
-      @mutex.synchronize do
-        unless @running.get
-          start
+    @slot : Box(T)? = nil
+
+    # The delay must be greater than zero.
+    def initialize(delay : Time::Span, &@action : T -> Nil)
+      @delay_ns = Delay.nanoseconds(delay)
+      # The lock does not cross a yield. The unchecked type skips owner checks.
+      @lock = Sync::Mutex.new(:unchecked)
+    end
+
+    # Store the latest value and move the deadline forward.
+    def call(value : T) : Nil
+      store(value)
+      schedule
+    end
+
+    private def deliver : Nil
+      slot = @lock.synchronize { @slot }
+      return unless slot
+
+      value = @lock.synchronize { slot.value }
+      @action.call(value)
+    end
+
+    # Replace the stored value. The first call creates the box. Later calls reuse it.
+    private def store(value : T) : Nil
+      @lock.synchronize do
+        if slot = @slot
+          slot.value = value
         else
-          return if delay <= 0.seconds # Early out for zero-delay
+          @slot = Box(T).new(value)
         end
-
-        @current_delay = delay
-        @current_action = action
       end
-
-      @trigger_channel.try &.send(nil)
-    end
-
-    def stop
-      return unless @running.compare_and_set(true, false)
-
-      if channel = @trigger_channel
-        channel.close
-      end
-    end
-
-    def reset # New: Abort pending, prep for reuse
-      stop
-      @current_action = nil
-      @current_delay = 0.seconds
     end
   end
 end
