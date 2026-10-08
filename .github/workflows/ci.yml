@@ -66,6 +66,7 @@ jobs:
 
       - name: Build specs binary
         run: |
+          echo 'require "./spec/**"' > all_specs.cr
           mkdir -p bin coverage
           crystal build all_specs.cr -o bin/all_specs --debug
 
